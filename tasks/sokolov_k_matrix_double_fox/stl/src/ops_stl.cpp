@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <functional>
 #include <thread>
 #include <vector>
 
@@ -74,7 +73,10 @@ void FoxMultiplyStl(const std::vector<double> &a, const std::vector<double> &b, 
       int row_begin = row;
       int add = (idx < extra) ? 1 : 0;
       row += rows_per + add;
-      threads[idx] = std::thread(FoxStepRows, std::cref(a), std::cref(b), std::ref(c), bs, q, step, row_begin, row);
+      int row_end = row;
+      threads[idx] = std::thread([&a, &b, &c, bs, q, step, row_begin, row_end]() {
+        FoxStepRows(a, b, c, bs, q, step, row_begin, row_end);
+      });
     }
     for (int idx = 0; idx < num_threads; idx++) {
       threads[idx].join();
