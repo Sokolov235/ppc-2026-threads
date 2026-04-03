@@ -51,13 +51,34 @@ void MultiplyBlocks(const std::vector<double> &a, int a_off, const std::vector<d
   }
 }
 
-void FoxStepParallel(const std::vector<double> &a, const std::vector<double> &b, std::vector<double> &c, int bs, int q,
-                     int step, int row_start, int row_end) {
+void ProcessRows(const std::vector<double> &a, const std::vector<double> &b, std::vector<double> &c, int bs, int q,
+                 int step, int row_start, int row_end) {
   int bsq = bs * bs;
   for (int i = row_start; i < row_end; i++) {
     int k = (i + step) % q;
     for (int j = 0; j < q; j++) {
       MultiplyBlocks(a, ((i * q) + k) * bsq, b, ((k * q) + j) * bsq, c, ((i * q) + j) * bsq, bs);
+    }
+  }
+}
+
+void RunFoxParallel(std::vector<double> &blocks_a, std::vector<double> &blocks_b, std::vector<double> &blocks_c, int bs,
+                    int q, int num_threads) {
+  std::vector<std::thread> threads(num_threads);
+  for (int step = 0; step < q; step++) {
+    int rows_per = q / num_threads;
+    int extra = q % num_threads;
+    int current_row = 0;
+    for (int idx = 0; idx < num_threads; idx++) {
+      int row_start = current_row;
+      int add = (idx < extra) ? 1 : 0;
+      current_row += rows_per + add;
+      threads[idx] = std::thread([&blocks_a, &blocks_b, &blocks_c, bs, q, step, row_start, current_row]() {
+        ProcessRows(blocks_a, blocks_b, blocks_c, bs, q, step, row_start, current_row);
+      });
+    }
+    for (int idx = 0; idx < num_threads; idx++) {
+      threads[idx].join();
     }
   }
 }
@@ -101,31 +122,8 @@ bool SokolovKMatrixDoubleFoxSTL::PreProcessingImpl() {
 
 bool SokolovKMatrixDoubleFoxSTL::RunImpl() {
   std::ranges::fill(blocks_c_, 0.0);
-
-  int num_threads = std::min(ppc::util::GetNumThreads(), q_);
-  if (num_threads <= 1) {
-    for (int step = 0; step < q_; step++) {
-      FoxStepParallel(blocks_a_, blocks_b_, blocks_c_, block_size_, q_, step, 0, q_);
-    }
-  } else {
-    std::vector<std::thread> threads(num_threads);
-    for (int step = 0; step < q_; step++) {
-      int rows_per_thread = q_ / num_threads;
-      int extra = q_ % num_threads;
-      int current_row = 0;
-      for (int t = 0; t < num_threads; t++) {
-        int row_start = current_row;
-        int row_end = row_start + rows_per_thread + (t < extra ? 1 : 0);
-        current_row = row_end;
-        threads[t] = std::thread(FoxStepParallel, std::cref(blocks_a_), std::cref(blocks_b_), std::ref(blocks_c_),
-                                 block_size_, q_, step, row_start, row_end);
-      }
-      for (int t = 0; t < num_threads; t++) {
-        threads[t].join();
-      }
-    }
-  }
-
+  int num_threads = std::max(1, std::min(ppc::util::GetNumThreads(), q_));
+  RunFoxParallel(blocks_a_, blocks_b_, blocks_c_, block_size_, q_, num_threads);
   return true;
 }
 
