@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <thread>
 #include <vector>
 
@@ -51,10 +52,10 @@ void MultiplyBlocks(const std::vector<double> &a, int a_off, const std::vector<d
   }
 }
 
-void ProcessRows(const std::vector<double> &a, const std::vector<double> &b, std::vector<double> &c, int bs, int q,
-                 int step, int row_start, int row_end) {
+void FoxStepRows(const std::vector<double> &a, const std::vector<double> &b, std::vector<double> &c, int bs, int q,
+                 int step, int row_begin, int row_end) {
   int bsq = bs * bs;
-  for (int i = row_start; i < row_end; i++) {
+  for (int i = row_begin; i < row_end; i++) {
     int k = (i + step) % q;
     for (int j = 0; j < q; j++) {
       MultiplyBlocks(a, ((i * q) + k) * bsq, b, ((k * q) + j) * bsq, c, ((i * q) + j) * bsq, bs);
@@ -62,20 +63,18 @@ void ProcessRows(const std::vector<double> &a, const std::vector<double> &b, std
   }
 }
 
-void RunFoxParallel(std::vector<double> &blocks_a, std::vector<double> &blocks_b, std::vector<double> &blocks_c, int bs,
-                    int q, int num_threads) {
+void FoxMultiplyStl(const std::vector<double> &a, const std::vector<double> &b, std::vector<double> &c, int bs, int q,
+                    int num_threads) {
   std::vector<std::thread> threads(num_threads);
+  int rows_per = q / num_threads;
+  int extra = q % num_threads;
   for (int step = 0; step < q; step++) {
-    int rows_per = q / num_threads;
-    int extra = q % num_threads;
-    int current_row = 0;
+    int row = 0;
     for (int idx = 0; idx < num_threads; idx++) {
-      int row_start = current_row;
+      int row_begin = row;
       int add = (idx < extra) ? 1 : 0;
-      current_row += rows_per + add;
-      threads[idx] = std::thread([&blocks_a, &blocks_b, &blocks_c, bs, q, step, row_start, current_row]() {
-        ProcessRows(blocks_a, blocks_b, blocks_c, bs, q, step, row_start, current_row);
-      });
+      row += rows_per + add;
+      threads[idx] = std::thread(FoxStepRows, std::cref(a), std::cref(b), std::ref(c), bs, q, step, row_begin, row);
     }
     for (int idx = 0; idx < num_threads; idx++) {
       threads[idx].join();
@@ -123,7 +122,7 @@ bool SokolovKMatrixDoubleFoxSTL::PreProcessingImpl() {
 bool SokolovKMatrixDoubleFoxSTL::RunImpl() {
   std::ranges::fill(blocks_c_, 0.0);
   int num_threads = std::max(1, std::min(ppc::util::GetNumThreads(), q_));
-  RunFoxParallel(blocks_a_, blocks_b_, blocks_c_, block_size_, q_, num_threads);
+  FoxMultiplyStl(blocks_a_, blocks_b_, blocks_c_, block_size_, q_, num_threads);
   return true;
 }
 
