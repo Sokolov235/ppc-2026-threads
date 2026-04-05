@@ -74,6 +74,40 @@ int ChooseBlockSizeAll(int n) {
   return 1;
 }
 
+void ComputeRowRange(int rank, int num_procs, int rows_per, int leftover, int &row_start, int &row_count) {
+  if (rank < num_procs) {
+    row_start = (rank * rows_per) + std::min(rank, leftover);
+    row_count = rows_per + (rank < leftover ? 1 : 0);
+  } else {
+    row_start = 0;
+    row_count = 0;
+  }
+}
+
+void GatherResults(std::vector<double> &blocks_c, int rank, int num_procs, int rows_per, int leftover, int q, int bsq) {
+  if (rank == 0) {
+    for (int pr = 1; pr < num_procs; pr++) {
+      int pr_start = 0;
+      int pr_count = 0;
+      ComputeRowRange(pr, num_procs, rows_per, leftover, pr_start, pr_count);
+      if (pr_count > 0) {
+        int offset = pr_start * q * bsq;
+        int count = pr_count * q * bsq;
+        MPI_Recv(blocks_c.data() + offset, count, MPI_DOUBLE, pr, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      }
+    }
+  } else if (rank < num_procs) {
+    int my_start = 0;
+    int my_count = 0;
+    ComputeRowRange(rank, num_procs, rows_per, leftover, my_start, my_count);
+    if (my_count > 0) {
+      int offset = my_start * q * bsq;
+      int count = my_count * q * bsq;
+      MPI_Send(blocks_c.data() + offset, count, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+    }
+  }
+}
+
 }  // namespace
 
 SokolovKMatrixDoubleFoxALL::SokolovKMatrixDoubleFoxALL(const InType &in) {
@@ -131,32 +165,16 @@ bool SokolovKMatrixDoubleFoxALL::RunImpl() {
 
   int my_row_start = 0;
   int my_row_count = 0;
-  if (rank < num_procs) {
-    my_row_start = rank * rows_per + std::min(rank, leftover);
-    my_row_count = rows_per + (rank < leftover ? 1 : 0);
-  }
+  ComputeRowRange(rank, num_procs, rows_per, leftover, my_row_start, my_row_count);
 
-  int row_end = my_row_start + my_row_count;
   for (int step = 0; step < q_; step++) {
-    FoxStepMpiOmp(blocks_a_, blocks_b_, blocks_c_, block_size_, q_, step, my_row_start, row_end);
+    FoxStepMpiOmp(blocks_a_, blocks_b_, blocks_c_, block_size_, q_, step, my_row_start, my_row_start + my_row_count);
   }
 
   int bsq = block_size_ * block_size_;
-  if (rank == 0) {
-    for (int p = 1; p < num_procs; p++) {
-      int p_start = p * rows_per + std::min(p, leftover);
-      int p_count = rows_per + (p < leftover ? 1 : 0);
-      if (p_count > 0) {
-        int offset = p_start * q_ * bsq;
-        int count = p_count * q_ * bsq;
-        MPI_Recv(blocks_c_.data() + offset, count, MPI_DOUBLE, p, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-      }
-    }
-  } else if (rank < num_procs && my_row_count > 0) {
-    int offset = my_row_start * q_ * bsq;
-    int count = my_row_count * q_ * bsq;
-    MPI_Send(blocks_c_.data() + offset, count, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
-  }
+  GatherResults(blocks_c_, rank, num_procs, rows_per, leftover, q_, bsq);
+
+  MPI_Bcast(blocks_c_.data(), total, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
   MPI_Barrier(MPI_COMM_WORLD);
   return true;
