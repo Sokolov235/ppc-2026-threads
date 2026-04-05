@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./ppc_perf_tests.exe --gtest_filter=\"*sokolov_k_matrix_double_fox*\")",
+      "Bash(./ppc_func_tests.exe --gtest_filter=\"*sokolov_k_matrix_double_fox*\")"
+    ]
+  }
+}
